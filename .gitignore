@@ -27,3 +27,17 @@ doc/api/
 
 .flutter-plugins
 .flutter-plugins-dependencies
+
+# Python
+ai_module/venv/
+ai_module/__pycache__/
+*.pyc
+
+# Node/Solidity
+blockchain_module/node_modules/
+blockchain_module/artifacts/
+blockchain_module/cache/
+
+# Env
+.env
+scamshield_app/.env
