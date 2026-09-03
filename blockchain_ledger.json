@@ -1,0 +1,23 @@
+[
+  {
+    "block_number": 100001,
+    "tx_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "prev_hash": "0x00",
+    "report_id": "genesis",
+    "merkle_root": "0xgenesis",
+    "timestamp": 1785607798,
+    "status": "SEALED"
+  },
+  {
+    "block_number": 100002,
+    "tx_hash": "0x8e1074fa9da066a43fa033d7a521ceae54f7ecb7666e4f6e6cb68b8f1ae8b1e1",
+    "prev_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "report_id": "test-uuid-99",
+    "contract_address": "0x8F3Cf7ad23Cd3CaDbD9735AFf958023239c6A063",
+    "scam_type": "crypto_investment",
+    "risk_score": 92,
+    "merkle_root": "0xd206f531e368c9efd01a0870fbd60d0c8f620a45",
+    "timestamp": 1785607798,
+    "status": "VERIFIED_ON_CHAIN"
+  }
+]
