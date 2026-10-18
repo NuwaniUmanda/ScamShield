@@ -41,3 +41,9 @@ blockchain_module/cache/
 # Env
 .env
 scamshield_app/.env
+
+# Backend Python
+.venv/
+backend/.venv/
+backend/__pycache__/
+__pycache__/
