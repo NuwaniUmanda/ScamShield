@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from ai_module.ai_engine import ai_engine
 from blockchain_module.ledger import blockchain_ledger
-from main import app
+from main import app, compute_report_hash
 
 client = TestClient(app)
 
@@ -81,6 +81,24 @@ class TestScamShieldAPI(unittest.TestCase):
         body = res.json()
         self.assertIn("found", body)
         self.assertIn("results", body)
+
+
+class TestReportHash(unittest.TestCase):
+
+    def test_same_input_same_hash(self):
+        h1 = compute_report_hash("desc", "spam", None, None, "msg")
+        h2 = compute_report_hash("desc", "spam", None, None, "msg")
+        self.assertEqual(h1, h2)
+        self.assertEqual(len(h1), 64)
+
+    def test_changed_input_changes_hash(self):
+        original = compute_report_hash("desc", "spam", None, None, "msg")
+        tampered = compute_report_hash("desc EDITED", "spam", None, None, "msg")
+        self.assertNotEqual(original, tampered)
+
+    def test_verify_unknown_id_returns_error(self):
+        res = client.get("/api/reports/verify/00000000-0000-0000-0000-000000000000")
+        self.assertEqual(res.status_code, 404)
 
 
 if __name__ == "__main__":
