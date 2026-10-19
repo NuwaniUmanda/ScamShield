@@ -66,6 +66,23 @@ class FullReportSubmitRequest(BaseModel):
     financial_loss: Optional[float] = 0.0
     evidence_urls: Optional[List[str]] = []
 
+
+def compute_report_hash(description, category, target_url, target_account, message_text) -> str:
+    """SHA-256 fingerprint built only from fields that are stored in the database."""
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "description": description,
+                "category": category,
+                "target_url": target_url,
+                "target_account": target_account,
+                "message_text": message_text,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 @app.get("/")
 def health_check():
     return {
@@ -169,19 +186,9 @@ def submit_report(req: FullReportSubmitRequest):
     report_id = str(uuid.uuid4())
 
     # SHA-256 fingerprint of the report content
-    report_hash = hashlib.sha256(
-        json.dumps(
-            {
-                "title": req.title,
-                "description": req.description,
-                "category": req.scam_type,
-                "target_url": req.target_url,
-                "target_account": req.target_account,
-                "message_text": req.message_text,
-            },
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()
+    report_hash = compute_report_hash(
+        req.description, req.scam_type, req.target_url, req.target_account, req.message_text
+    )
 
     tx_hash = None
 
@@ -244,6 +251,43 @@ def search_reports(url: Optional[str] = None, account: Optional[str] = None):
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
     return {"found": len(result.data) > 0, "count": len(result.data), "results": result.data}
+
+@app.get("/api/reports/verify/{report_id}")
+def verify_report_integrity(report_id: str):
+    """
+    Recompute the SHA-256 fingerprint of a saved report and compare it
+    with the stored report_hash to detect tampering.
+    """
+    try:
+        result = with_retry(
+            lambda: supabase.table("scam_reports")
+            .select("id,category,description,target_url,target_account,message_text,report_hash,blockchain_tx_hash")
+            .eq("id", report_id)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Report not found (or not public)")
+
+    row = result.data[0]
+
+    recomputed = compute_report_hash(
+        row["description"],
+        row["category"],
+        row["target_url"],
+        row["target_account"],
+        row["message_text"],
+    )
+
+    return {
+        "report_id": row["id"],
+        "stored_hash": row["report_hash"],
+        "recomputed_hash": recomputed,
+        "intact": recomputed == row["report_hash"],
+        "blockchain_tx_hash": row["blockchain_tx_hash"],
+    }
 
 @app.get("/api/stats")
 def get_stats():
