@@ -3,14 +3,14 @@ import os
 import uuid
 import hashlib
 import json
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Literal
 
 # Ensure parent directory is in path so we can import ai_module & blockchain_module
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from fastapi import FastAPI, HTTPException, Body, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ai_module.ai_engine import ai_engine
 from blockchain_module.ledger import blockchain_ledger
@@ -34,7 +34,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pydantic Schemas
+
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
 class AIAnalysisRequest(BaseModel):
     title: str
     description: str
@@ -45,12 +48,14 @@ class AIAnalysisRequest(BaseModel):
     target_email: Optional[str] = None
     financial_loss: Optional[float] = 0.0
 
+
 class BlockchainRecordRequest(BaseModel):
     report_id: str
     title: str
     scam_type: str
     risk_score: int
     target_info: Optional[str] = ""
+
 
 class FullReportSubmitRequest(BaseModel):
     title: str
@@ -67,6 +72,9 @@ class FullReportSubmitRequest(BaseModel):
     evidence_urls: Optional[List[str]] = []
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def compute_report_hash(description, category, target_url, target_account, message_text) -> str:
     """SHA-256 fingerprint built only from fields that are stored in the database."""
     return hashlib.sha256(
@@ -83,6 +91,9 @@ def compute_report_hash(description, category, target_url, target_account, messa
     ).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
 @app.get("/")
 def health_check():
     return {
@@ -93,13 +104,14 @@ def health_check():
         "contract_address": blockchain_ledger.CONTRACT_ADDRESS
     }
 
+
+# ---------------------------------------------------------------------------
+# AI + blockchain helper endpoints
+# ---------------------------------------------------------------------------
 @app.post("/api/ai/analyze")
 def analyze_scam(req: AIAnalysisRequest):
-    """
-    Evaluates scam report details using AI NLP intent recognition,
-    domain risk checking, and threat scoring algorithms.
-    """
-    result = ai_engine.analyze_report(
+    """Evaluate report details with the AI engine."""
+    return ai_engine.analyze_report(
         title=req.title,
         description=req.description,
         scam_type=req.scam_type or "other",
@@ -109,54 +121,32 @@ def analyze_scam(req: AIAnalysisRequest):
         target_email=req.target_email,
         financial_loss=req.financial_loss or 0.0
     )
-    return result
+
 
 @app.post("/api/blockchain/record")
 def record_on_blockchain(req: BlockchainRecordRequest):
-    """
-    Cryptographically logs a verified report on the ScamShield blockchain ledger.
-    """
-    block_entry = blockchain_ledger.record_scam_on_chain(
+    """Log a verified report on the ScamShield blockchain ledger."""
+    return blockchain_ledger.record_scam_on_chain(
         report_id=req.report_id,
         title=req.title,
         scam_type=req.scam_type,
         risk_score=req.risk_score,
         target_info=req.target_info or ""
     )
-    return block_entry
+
 
 @app.get("/api/blockchain/verify/{tx_hash}")
 def verify_blockchain_hash(tx_hash: str):
-    """
-    Validates a transaction hash against the immutable ledger history.
-    """
+    """Validate a transaction hash against the ledger history."""
     verification = blockchain_ledger.verify_hash(tx_hash)
     if not verification.get("is_valid"):
         raise HTTPException(status_code=404, detail=verification.get("message", "Hash invalid"))
     return verification
 
-@app.post("/api/reports/submit-and-analyze")
-def submit_and_analyze(req: FullReportSubmitRequest):
-    """
-    One-stop backend endpoint that runs AI risk assessment and Pre-prepares blockchain fingerprint.
-    """
-    ai_result = ai_engine.analyze_report(
-        title=req.title,
-        description=req.description,
-        scam_type=req.scam_type,
-        target_url=req.target_url,
-        target_phone=req.target_phone,
-        target_wallet=req.target_wallet,
-        target_email=req.target_email,
-        financial_loss=req.financial_loss or 0.0
-    )
 
-    return {
-        "status": "evaluated",
-        "ai_result": ai_result,
-        "payload": req.dict()
-    }
-
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
 @app.post("/api/reports/submit")
 def submit_report(req: FullReportSubmitRequest):
     """
@@ -182,16 +172,13 @@ def submit_report(req: FullReportSubmitRequest):
     )
 
     status = decide_status(ai_result["confidence"])
-
     report_id = str(uuid.uuid4())
 
-    # SHA-256 fingerprint of the report content
     report_hash = compute_report_hash(
         req.description, req.scam_type, req.target_url, req.target_account, req.message_text
     )
 
     tx_hash = None
-
     if status == "verified":
         try:
             block = blockchain_ledger.record_scam_on_chain(
@@ -228,11 +215,10 @@ def submit_report(req: FullReportSubmitRequest):
 
     return {"status": status, "ai_result": ai_result, "saved": saved.data}
 
+
 @app.get("/api/reports/search")
 def search_reports(url: Optional[str] = None, account: Optional[str] = None):
-    """
-    Public search: find verified scam reports by URL or Facebook account.
-    """
+    """Public search: find verified scam reports by URL or Facebook account."""
     if not url and not account:
         raise HTTPException(status_code=400, detail="Provide url or account to search")
 
@@ -252,12 +238,28 @@ def search_reports(url: Optional[str] = None, account: Optional[str] = None):
 
     return {"found": len(result.data) > 0, "count": len(result.data), "results": result.data}
 
+
+@app.get("/api/reports/suspicious")
+def list_suspicious_reports(limit: int = 20):
+    """Public list of unverified reports. Metadata only (no URL, account, text or screenshot)."""
+    limit = max(1, min(limit, 100))
+    try:
+        result = with_retry(
+            lambda: supabase.table("suspicious_reports_public")
+            .select("id,category,risk_score,created_at")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    return {"count": len(result.data), "results": result.data}
+
+
 @app.get("/api/reports/verify/{report_id}")
 def verify_report_integrity(report_id: str):
-    """
-    Recompute the SHA-256 fingerprint of a saved report and compare it
-    with the stored report_hash to detect tampering.
-    """
+    """Recompute the SHA-256 fingerprint of a saved report and compare it with the stored one."""
     try:
         result = with_retry(
             lambda: supabase.table("scam_reports")
@@ -272,7 +274,6 @@ def verify_report_integrity(report_id: str):
         raise HTTPException(status_code=404, detail="Report not found (or not public)")
 
     row = result.data[0]
-
     recomputed = compute_report_hash(
         row["description"],
         row["category"],
@@ -289,11 +290,13 @@ def verify_report_integrity(report_id: str):
         "blockchain_tx_hash": row["blockchain_tx_hash"],
     }
 
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
 @app.get("/api/stats")
 def get_stats():
-    """
-    Public dashboard: count of verified reports per category.
-    """
+    """Public dashboard: count of verified reports per category."""
     try:
         result = with_retry(
             lambda: supabase.table("scam_reports").select("category").eq("status", "verified").execute()
@@ -308,11 +311,13 @@ def get_stats():
 
     return {"total": len(result.data), "by_category": counts}
 
+
+# ---------------------------------------------------------------------------
+# Upload
+# ---------------------------------------------------------------------------
 @app.post("/api/upload-screenshot")
 async def upload_screenshot(file: UploadFile = File(...)):
-    """
-    Upload a screenshot to Supabase Storage and return its public URL.
-    """
+    """Upload a screenshot to Supabase Storage and return its public URL."""
     allowed = ["image/png", "image/jpeg", "image/webp"]
     if file.content_type not in allowed:
         raise HTTPException(status_code=400, detail="Only PNG, JPEG or WEBP images are allowed")
@@ -333,6 +338,7 @@ async def upload_screenshot(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Storage error: {e}")
 
     return {"screenshot_url": url}
+
 
 if __name__ == "__main__":
     import uvicorn
