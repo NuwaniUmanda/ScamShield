@@ -16,7 +16,7 @@ from ai_module.ai_engine import ai_engine
 from blockchain_module.ledger import blockchain_ledger
 from database import supabase
 from logic import decide_status
-from retry import with_retry
+from retry_helper import with_retry
 
 app = FastAPI(
     title="ScamShield API Server",
@@ -150,7 +150,7 @@ def verify_blockchain_hash(tx_hash: str):
 @app.post("/api/reports/submit")
 def submit_report(req: FullReportSubmitRequest):
     """
-    Analyze a report with AI, decide verified/suspicious (60% rule),
+    Analyze a report with AI, decide verified/suspicious (confidence and risk rule),
     record verified reports on the blockchain ledger, and save everything to Supabase.
     """
     # Facebook-specific text is added to the description so the AI also sees it
@@ -171,7 +171,7 @@ def submit_report(req: FullReportSubmitRequest):
         financial_loss=req.financial_loss or 0.0
     )
 
-    status = decide_status(ai_result["confidence"])
+    status = decide_status(ai_result["confidence"], ai_result["risk_score"])
     report_id = str(uuid.uuid4())
 
     report_hash = compute_report_hash(
