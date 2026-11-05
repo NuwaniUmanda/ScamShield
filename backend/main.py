@@ -183,6 +183,7 @@ def submit_report(req: FullReportSubmitRequest):
     """
     Analyze report using AI.
     Decide verified or suspicious using confidence and risk score.
+    Check for duplicate reports.
     Record verified reports on blockchain.
     Save reports to Supabase.
     """
@@ -221,11 +222,50 @@ def submit_report(req: FullReportSubmitRequest):
         req.message_text
     )
 
+    # -----------------------------------------------------------------------
+    # Duplicate Report Detection
+    # -----------------------------------------------------------------------
+
+    try:
+
+        duplicate_result = with_retry(
+            lambda: supabase.table("scam_reports")
+            .select("id,status,created_at")
+            .eq("report_hash", report_hash)
+            .limit(1)
+            .execute()
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Duplicate check error: {e}"
+        )
+
+    if duplicate_result.data:
+
+        existing = duplicate_result.data[0]
+
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "An identical report already exists",
+                "existing_report_id": existing["id"],
+                "existing_status": existing["status"]
+            }
+        )
+
+    # -----------------------------------------------------------------------
+    # Blockchain Recording
+    # -----------------------------------------------------------------------
+
     tx_hash = None
 
     if status == "verified":
 
         try:
+
             block = blockchain_ledger.record_scam_on_chain(
                 report_id=report_id,
                 title=req.title,
@@ -243,7 +283,10 @@ def submit_report(req: FullReportSubmitRequest):
                 detail=f"Blockchain error: {e}"
             )
 
-    # Complete report data mapping
+    # -----------------------------------------------------------------------
+    # Complete Report Data Mapping
+    # -----------------------------------------------------------------------
+
     row = {
         "id": report_id,
         "title": req.title,

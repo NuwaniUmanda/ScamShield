@@ -3,6 +3,9 @@ import unittest
 import sys
 import os
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from fastapi.testclient import TestClient
@@ -135,6 +138,75 @@ class TestScamShieldAPI(unittest.TestCase):
 
         self.assertIn("found", body)
         self.assertIn("results", body)
+
+    # Duplicate Report Detection Test
+
+    def test_duplicate_report_returns_409(self):
+
+        report_data = {
+            "title": "Repeated scam report",
+            "description": "Please verify your bank account immediately",
+            "scam_type": "phishing",
+            "target_url": "https://example-suspicious.test/login",
+            "target_account": "fake-bank-page",
+            "message_text": "Please verify your bank account immediately"
+        }
+
+        existing_report = SimpleNamespace(
+            data=[
+                {
+                    "id": "existing-report-123",
+                    "status": "suspicious",
+                    "created_at": "2026-11-05T12:00:00+00:00"
+                }
+            ]
+        )
+
+        with patch(
+            "main.ai_engine.analyze_report",
+            return_value={
+                "confidence": 0.93,
+                "risk_score": 25
+            }
+        ) as mock_ai:
+
+            with patch(
+                "main.with_retry",
+                side_effect=lambda operation: operation()
+            ):
+
+                with patch("main.supabase.table") as mock_table:
+
+                    with patch(
+                        "main.blockchain_ledger.record_scam_on_chain"
+                    ) as mock_blockchain:
+
+                        mock_table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = existing_report
+
+                        res = client.post(
+                            "/api/reports/submit",
+                            json=report_data
+                        )
+
+                        self.assertEqual(res.status_code, 409)
+
+                        body = res.json()
+
+                        self.assertEqual(
+                            body["detail"]["message"],
+                            "An identical report already exists"
+                        )
+
+                        self.assertEqual(
+                            body["detail"]["existing_report_id"],
+                            "existing-report-123"
+                        )
+
+                        mock_ai.assert_called_once()
+
+                        mock_blockchain.assert_not_called()
+
+                        mock_table.return_value.insert.assert_not_called()
 
 
 class TestReportHash(unittest.TestCase):
