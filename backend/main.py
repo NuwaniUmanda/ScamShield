@@ -29,7 +29,10 @@ app = FastAPI(
 )
 
 
+# ---------------------------------------------------------------------------
 # CORS Configuration
+# ---------------------------------------------------------------------------
+
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
@@ -240,14 +243,20 @@ def submit_report(req: FullReportSubmitRequest):
                 detail=f"Blockchain error: {e}"
             )
 
+    # Complete report data mapping
     row = {
         "id": report_id,
+        "title": req.title,
         "category": req.scam_type,
         "description": req.description,
         "target_url": req.target_url,
         "target_account": req.target_account,
+        "target_phone": req.target_phone,
+        "target_wallet": req.target_wallet,
+        "target_email": req.target_email,
         "message_text": req.message_text,
         "screenshot_url": req.screenshot_url,
+        "evidence_urls": req.evidence_urls or [],
         "risk_score": ai_result["risk_score"],
         "confidence": ai_result["confidence"],
         "ai_analysis": ai_result,
@@ -537,3 +546,4 @@ if __name__ == "__main__":
         port=8000,
         reload=True
     )
+
