@@ -445,63 +445,82 @@ def get_stats():
 
 
 # ---------------------------------------------------------------------------
-# Screenshot Upload
+# Screenshot Upload - Secure File Signature Validation
 # ---------------------------------------------------------------------------
 
 @app.post("/api/upload-screenshot")
 async def upload_screenshot(file: UploadFile = File(...)):
 
-    allowed = [
-        "image/png",
-        "image/jpeg",
-        "image/webp"
-    ]
-
-    if file.content_type not in allowed:
-        raise HTTPException(
-            status_code=400,
-            detail="Only PNG, JPEG or WEBP images are allowed"
-        )
-
-    # Read only up to 5 MB + 1 byte to prevent large file memory usage.
-    content = await file.read(5 * 1024 * 1024 + 1)
-
-    if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(
-            status_code=400,
-            detail="File too large (max 5 MB)"
-        )
-
-    ext = (
-        file.filename.rsplit(".", 1)[-1].lower()
-        if file.filename and "." in file.filename
-        else "png"
-    )
-
-    path = f"{uuid.uuid4()}.{ext}"
-
     try:
 
-        with_retry(
-            lambda: supabase.storage.from_("scam-evidence").upload(
-                path,
-                content,
-                {"content-type": file.content_type}
+        # Read only up to 5 MB + 1 byte
+        content = await file.read(5 * 1024 * 1024 + 1)
+
+        # Check maximum file size
+        if len(content) > 5 * 1024 * 1024:
+            raise HTTPException(
+                status_code=400,
+                detail="File too large (max 5 MB)"
             )
-        )
 
-        url = supabase.storage.from_("scam-evidence").get_public_url(path)
+        # Detect actual PNG file signature
+        if content.startswith(b"\x89PNG\r\n\x1a\n"):
 
-    except Exception as e:
+            extension = "png"
+            detected_content_type = "image/png"
 
-        raise HTTPException(
-            status_code=500,
-            detail=f"Storage error: {e}"
-        )
+        # Detect actual JPEG file signature
+        elif content.startswith(b"\xff\xd8\xff"):
 
-    return {
-        "screenshot_url": url
-    }
+            extension = "jpg"
+            detected_content_type = "image/jpeg"
+
+        # Detect actual WEBP file signature
+        elif (
+            len(content) >= 12
+            and content[0:4] == b"RIFF"
+            and content[8:12] == b"WEBP"
+        ):
+
+            extension = "webp"
+            detected_content_type = "image/webp"
+
+        else:
+
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid image file. Upload a real PNG, JPEG or WEBP image"
+            )
+
+        # Generate a unique filename
+        path = f"{uuid.uuid4()}.{extension}"
+
+        try:
+
+            with_retry(
+                lambda: supabase.storage.from_("scam-evidence").upload(
+                    path,
+                    content,
+                    {"content-type": detected_content_type}
+                )
+            )
+
+            url = supabase.storage.from_("scam-evidence").get_public_url(path)
+
+        except Exception as e:
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"Storage error: {e}"
+            )
+
+        return {
+            "screenshot_url": url
+        }
+
+    finally:
+
+        await file.close()
 
 
 # ---------------------------------------------------------------------------
