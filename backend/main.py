@@ -184,7 +184,6 @@ def submit_report(req: FullReportSubmitRequest):
     Save reports to Supabase.
     """
 
-    # Include Facebook-specific text in AI analysis
     ai_description = req.description
 
     if req.message_text:
@@ -193,7 +192,6 @@ def submit_report(req: FullReportSubmitRequest):
     if req.target_account:
         ai_description += " " + req.target_account
 
-    # AI analysis
     ai_result = ai_engine.analyze_report(
         title=req.title,
         description=ai_description,
@@ -205,7 +203,6 @@ def submit_report(req: FullReportSubmitRequest):
         financial_loss=req.financial_loss or 0.0
     )
 
-    # Decide report status
     status = decide_status(
         ai_result["confidence"],
         ai_result["risk_score"]
@@ -213,7 +210,6 @@ def submit_report(req: FullReportSubmitRequest):
 
     report_id = str(uuid.uuid4())
 
-    # Generate SHA-256 report hash
     report_hash = compute_report_hash(
         req.description,
         req.scam_type,
@@ -224,7 +220,6 @@ def submit_report(req: FullReportSubmitRequest):
 
     tx_hash = None
 
-    # Record only verified reports on blockchain
     if status == "verified":
 
         try:
@@ -245,7 +240,6 @@ def submit_report(req: FullReportSubmitRequest):
                 detail=f"Blockchain error: {e}"
             )
 
-    # Prepare database record
     row = {
         "id": report_id,
         "category": req.scam_type,
@@ -262,8 +256,6 @@ def submit_report(req: FullReportSubmitRequest):
         "report_hash": report_hash,
     }
 
-    # Insert without requesting the inserted database row.
-    # This avoids requiring SELECT permission for suspicious reports.
     try:
 
         with_retry(
@@ -471,7 +463,8 @@ async def upload_screenshot(file: UploadFile = File(...)):
             detail="Only PNG, JPEG or WEBP images are allowed"
         )
 
-    content = await file.read()
+    # Read only up to 5 MB + 1 byte to prevent large file memory usage.
+    content = await file.read(5 * 1024 * 1024 + 1)
 
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(

@@ -107,6 +107,22 @@ class TestScamShieldAPI(unittest.TestCase):
 
         self.assertEqual(res.status_code, 400)
 
+    def test_upload_rejects_file_larger_than_5mb(self):
+        large_file = b"x" * (5 * 1024 * 1024 + 1)
+
+        res = client.post(
+            "/api/upload-screenshot",
+            files={
+                "file": ("large.png", large_file, "image/png")
+            },
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(
+            res.json()["detail"],
+            "File too large (max 5 MB)"
+        )
+
     def test_search_returns_expected_shape(self):
         res = client.get(
             "/api/reports/search",
