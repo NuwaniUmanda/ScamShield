@@ -1,3 +1,4 @@
+
 import unittest
 import sys
 import os
@@ -9,8 +10,24 @@ from fastapi.testclient import TestClient
 from ai_module.ai_engine import ai_engine
 from blockchain_module.ledger import blockchain_ledger
 from main import app, compute_report_hash
+from logic import decide_status
 
 client = TestClient(app)
+
+
+class TestDecisionLogic(unittest.TestCase):
+
+    def test_low_risk_should_be_suspicious(self):
+        result = decide_status(0.93, 25)
+        self.assertEqual(result, "suspicious")
+
+    def test_high_risk_should_be_verified(self):
+        result = decide_status(0.93, 99)
+        self.assertEqual(result, "verified")
+
+    def test_confidence_at_60_percent_should_be_suspicious(self):
+        result = decide_status(0.60, 99)
+        self.assertEqual(result, "suspicious")
 
 
 class TestScamShieldBackend(unittest.TestCase):
@@ -24,9 +41,15 @@ class TestScamShieldBackend(unittest.TestCase):
             target_phone="+18005550199",
             financial_loss=1200.0
         )
+
         self.assertGreaterEqual(result["risk_score"], 80)
         self.assertEqual(result["risk_level"], "CRITICAL")
-        self.assertTrue(any("domain" in s.lower() or "tld" in s.lower() for s in result["signals"]))
+        self.assertTrue(
+            any(
+                "domain" in s.lower() or "tld" in s.lower()
+                for s in result["signals"]
+            )
+        )
 
     def test_blockchain_ledger_recording_and_verification(self):
         block_entry = blockchain_ledger.record_scam_on_chain(
@@ -36,10 +59,14 @@ class TestScamShieldBackend(unittest.TestCase):
             risk_score=92,
             target_info="0x32Be343B94f860124dC4fEe278FDCBD38C102D88"
         )
+
         self.assertTrue(block_entry["tx_hash"].startswith("0x"))
         self.assertEqual(block_entry["status"], "VERIFIED_ON_CHAIN")
 
-        verification = blockchain_ledger.verify_hash(block_entry["tx_hash"])
+        verification = blockchain_ledger.verify_hash(
+            block_entry["tx_hash"]
+        )
+
         self.assertTrue(verification["is_valid"])
 
 
@@ -47,6 +74,7 @@ class TestScamShieldAPI(unittest.TestCase):
 
     def test_health_check(self):
         res = client.get("/")
+
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["status"], "online")
 
@@ -56,14 +84,17 @@ class TestScamShieldAPI(unittest.TestCase):
             "description": "Test",
             "scam_type": "crypto"
         })
+
         self.assertEqual(res.status_code, 422)
 
     def test_search_requires_param(self):
         res = client.get("/api/reports/search")
+
         self.assertEqual(res.status_code, 400)
 
     def test_stats_shape(self):
         res = client.get("/api/stats")
+
         self.assertEqual(res.status_code, 200)
         self.assertIn("total", res.json())
         self.assertIn("by_category", res.json())
@@ -73,12 +104,19 @@ class TestScamShieldAPI(unittest.TestCase):
             "/api/upload-screenshot",
             files={"file": ("test.txt", b"hello", "text/plain")},
         )
+
         self.assertEqual(res.status_code, 400)
 
     def test_search_returns_expected_shape(self):
-        res = client.get("/api/reports/search", params={"url": "secure-login"})
+        res = client.get(
+            "/api/reports/search",
+            params={"url": "secure-login"}
+        )
+
         self.assertEqual(res.status_code, 200)
+
         body = res.json()
+
         self.assertIn("found", body)
         self.assertIn("results", body)
 
@@ -86,18 +124,33 @@ class TestScamShieldAPI(unittest.TestCase):
 class TestReportHash(unittest.TestCase):
 
     def test_same_input_same_hash(self):
-        h1 = compute_report_hash("desc", "spam", None, None, "msg")
-        h2 = compute_report_hash("desc", "spam", None, None, "msg")
+        h1 = compute_report_hash(
+            "desc", "spam", None, None, "msg"
+        )
+
+        h2 = compute_report_hash(
+            "desc", "spam", None, None, "msg"
+        )
+
         self.assertEqual(h1, h2)
         self.assertEqual(len(h1), 64)
 
     def test_changed_input_changes_hash(self):
-        original = compute_report_hash("desc", "spam", None, None, "msg")
-        tampered = compute_report_hash("desc EDITED", "spam", None, None, "msg")
+        original = compute_report_hash(
+            "desc", "spam", None, None, "msg"
+        )
+
+        tampered = compute_report_hash(
+            "desc EDITED", "spam", None, None, "msg"
+        )
+
         self.assertNotEqual(original, tampered)
 
     def test_verify_unknown_id_returns_error(self):
-        res = client.get("/api/reports/verify/00000000-0000-0000-0000-000000000000")
+        res = client.get(
+            "/api/reports/verify/00000000-0000-0000-0000-000000000000"
+        )
+
         self.assertEqual(res.status_code, 404)
 
 
