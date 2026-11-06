@@ -4,6 +4,8 @@ import os
 import uuid
 import hashlib
 import json
+import time
+
 from typing import Optional, List, Literal
 
 # Ensure parent directory is in path
@@ -20,6 +22,7 @@ from blockchain_module.ledger import blockchain_ledger
 from database import supabase, supabase_admin
 from logic import decide_status
 from retry_helper import with_retry
+from logging_config import logger
 
 
 app = FastAPI(
@@ -43,10 +46,60 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
+# API Request Logging Middleware
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def log_api_requests(request, call_next):
+
+    start_time = time.perf_counter()
+
+    try:
+
+        response = await call_next(request)
+
+        duration_ms = (
+            time.perf_counter() - start_time
+        ) * 1000
+
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", "unmatched")
+
+        logger.info(
+            "API request completed | method=%s path=%s status_code=%s duration_ms=%.2f",
+            request.method,
+            route_path,
+            response.status_code,
+            duration_ms
+        )
+
+        return response
+
+    except Exception:
+
+        duration_ms = (
+            time.perf_counter() - start_time
+        ) * 1000
+
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", "unmatched")
+
+        logger.exception(
+            "API request failed | method=%s path=%s duration_ms=%.2f",
+            request.method,
+            route_path,
+            duration_ms
+        )
+
+        raise
+
+
+# ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
 
 class AIAnalysisRequest(BaseModel):
+
     title: str
     description: str
     scam_type: Optional[str] = "other"
@@ -58,6 +111,7 @@ class AIAnalysisRequest(BaseModel):
 
 
 class BlockchainRecordRequest(BaseModel):
+
     report_id: str
     title: str
     scam_type: str
@@ -66,6 +120,7 @@ class BlockchainRecordRequest(BaseModel):
 
 
 class FullReportSubmitRequest(BaseModel):
+
     title: str
     description: str
     scam_type: Literal["phishing", "fake_account", "spam"]
@@ -115,6 +170,8 @@ def compute_report_hash(
 @app.get("/")
 def health_check():
 
+    logger.info("Health check endpoint accessed")
+
     return {
         "status": "online",
         "service": "ScamShield Backend API",
@@ -131,16 +188,36 @@ def health_check():
 @app.post("/api/ai/analyze")
 def analyze_scam(req: AIAnalysisRequest):
 
-    return ai_engine.analyze_report(
-        title=req.title,
-        description=req.description,
-        scam_type=req.scam_type or "other",
-        target_url=req.target_url,
-        target_phone=req.target_phone,
-        target_wallet=req.target_wallet,
-        target_email=req.target_email,
-        financial_loss=req.financial_loss or 0.0
+    logger.info(
+        "AI analysis requested | scam_type=%s",
+        req.scam_type
     )
+
+    try:
+
+        result = ai_engine.analyze_report(
+            title=req.title,
+            description=req.description,
+            scam_type=req.scam_type or "other",
+            target_url=req.target_url,
+            target_phone=req.target_phone,
+            target_wallet=req.target_wallet,
+            target_email=req.target_email,
+            financial_loss=req.financial_loss or 0.0
+        )
+
+        logger.info("AI analysis completed successfully")
+
+        return result
+
+    except Exception:
+
+        logger.exception("AI analysis failed")
+
+        raise HTTPException(
+            status_code=500,
+            detail="AI analysis failed"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -150,13 +227,39 @@ def analyze_scam(req: AIAnalysisRequest):
 @app.post("/api/blockchain/record")
 def record_on_blockchain(req: BlockchainRecordRequest):
 
-    return blockchain_ledger.record_scam_on_chain(
-        report_id=req.report_id,
-        title=req.title,
-        scam_type=req.scam_type,
-        risk_score=req.risk_score,
-        target_info=req.target_info or ""
+    logger.info(
+        "Blockchain recording requested | report_id=%s",
+        req.report_id
     )
+
+    try:
+
+        result = blockchain_ledger.record_scam_on_chain(
+            report_id=req.report_id,
+            title=req.title,
+            scam_type=req.scam_type,
+            risk_score=req.risk_score,
+            target_info=req.target_info or ""
+        )
+
+        logger.info(
+            "Blockchain recording completed | report_id=%s",
+            req.report_id
+        )
+
+        return result
+
+    except Exception:
+
+        logger.exception(
+            "Blockchain recording failed | report_id=%s",
+            req.report_id
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Blockchain recording failed"
+        )
 
 
 @app.get("/api/blockchain/verify/{tx_hash}")
@@ -165,10 +268,15 @@ def verify_blockchain_hash(tx_hash: str):
     verification = blockchain_ledger.verify_hash(tx_hash)
 
     if not verification.get("is_valid"):
+
+        logger.warning("Blockchain hash verification failed")
+
         raise HTTPException(
             status_code=404,
             detail=verification.get("message", "Hash invalid")
         )
+
+    logger.info("Blockchain hash verified successfully")
 
     return verification
 
@@ -189,6 +297,11 @@ def submit_report(req: FullReportSubmitRequest):
     6. Update database after successful blockchain recording.
     """
 
+    logger.info(
+        "Scam report submission started | category=%s",
+        req.scam_type
+    )
+
     # -----------------------------------------------------------------------
     # Prepare AI Description
     # -----------------------------------------------------------------------
@@ -205,16 +318,27 @@ def submit_report(req: FullReportSubmitRequest):
     # AI Analysis
     # -----------------------------------------------------------------------
 
-    ai_result = ai_engine.analyze_report(
-        title=req.title,
-        description=ai_description,
-        scam_type=req.scam_type,
-        target_url=req.target_url,
-        target_phone=req.target_phone,
-        target_wallet=req.target_wallet,
-        target_email=req.target_email,
-        financial_loss=req.financial_loss or 0.0
-    )
+    try:
+
+        ai_result = ai_engine.analyze_report(
+            title=req.title,
+            description=ai_description,
+            scam_type=req.scam_type,
+            target_url=req.target_url,
+            target_phone=req.target_phone,
+            target_wallet=req.target_wallet,
+            target_email=req.target_email,
+            financial_loss=req.financial_loss or 0.0
+        )
+
+    except Exception:
+
+        logger.exception("AI analysis failed during report submission")
+
+        raise HTTPException(
+            status_code=500,
+            detail="AI analysis failed"
+        )
 
     status = decide_status(
         ai_result["confidence"],
@@ -252,6 +376,11 @@ def submit_report(req: FullReportSubmitRequest):
 
     except Exception:
 
+        logger.exception(
+            "Duplicate report check failed | report_id=%s",
+            report_id
+        )
+
         raise HTTPException(
             status_code=500,
             detail="Duplicate report check failed"
@@ -260,6 +389,11 @@ def submit_report(req: FullReportSubmitRequest):
     if duplicate_result.data:
 
         existing = duplicate_result.data[0]
+
+        logger.warning(
+            "Duplicate report detected | existing_report_id=%s",
+            existing["id"]
+        )
 
         raise HTTPException(
             status_code=409,
@@ -306,9 +440,7 @@ def submit_report(req: FullReportSubmitRequest):
         "is_duplicate": False
     }
 
-    # Keep a separate copy for the database insertion.
-    # This preserves the original pending status.
-
+    # Preserve original database insertion data
     insert_row = row.copy()
 
     # -----------------------------------------------------------------------
@@ -323,12 +455,22 @@ def submit_report(req: FullReportSubmitRequest):
             .execute()
         )
 
+        logger.info(
+            "Report saved to database | report_id=%s status=%s",
+            report_id,
+            initial_status
+        )
+
     except Exception as e:
 
         error_code = getattr(e, "code", None)
 
-        # PostgreSQL unique constraint violation
         if error_code == "23505":
+
+            logger.warning(
+                "Duplicate database constraint violation | report_id=%s",
+                report_id
+            )
 
             raise HTTPException(
                 status_code=409,
@@ -338,12 +480,17 @@ def submit_report(req: FullReportSubmitRequest):
                 }
             )
 
+        logger.exception(
+            "Database report insertion failed | report_id=%s",
+            report_id
+        )
+
         raise HTTPException(
             status_code=500,
             detail="Database report insertion failed"
         )
 
-    # Separate copy for the final API response.
+    # Separate copy for final API response
     response_row = row.copy()
 
     # -----------------------------------------------------------------------
@@ -364,10 +511,17 @@ def submit_report(req: FullReportSubmitRequest):
 
             tx_hash = block["tx_hash"]
 
+            logger.info(
+                "Blockchain recording succeeded | report_id=%s",
+                report_id
+            )
+
         except Exception:
 
-            # Report remains pending_blockchain.
-            # It needs a later retry or reconciliation.
+            logger.exception(
+                "Blockchain recording failed | report_id=%s",
+                report_id
+            )
 
             raise HTTPException(
                 status_code=502,
@@ -397,10 +551,17 @@ def submit_report(req: FullReportSubmitRequest):
                 .execute()
             )
 
+            logger.info(
+                "Database updated after blockchain success | report_id=%s",
+                report_id
+            )
+
         except Exception:
 
-            # Blockchain transaction exists but database update failed.
-            # Report remains pending for reconciliation.
+            logger.exception(
+                "Database update failed after blockchain recording | report_id=%s",
+                report_id
+            )
 
             raise HTTPException(
                 status_code=500,
@@ -415,15 +576,26 @@ def submit_report(req: FullReportSubmitRequest):
                 }
             )
 
-        # Update only the response copy.
-        # Do not modify the original database insertion data.
-
+        # Update response copy only
         response_row["status"] = "verified"
         response_row["blockchain_tx_hash"] = tx_hash
+
+    else:
+
+        logger.info(
+            "Report classified as suspicious | report_id=%s",
+            report_id
+        )
 
     # -----------------------------------------------------------------------
     # Final Response
     # -----------------------------------------------------------------------
+
+    logger.info(
+        "Report submission completed | report_id=%s status=%s",
+        report_id,
+        status
+    )
 
     return {
         "status": status,
@@ -443,6 +615,9 @@ def search_reports(
 ):
 
     if not url and not account:
+
+        logger.warning("Scam search requested without parameters")
+
         raise HTTPException(
             status_code=400,
             detail="Provide url or account to search"
@@ -463,7 +638,14 @@ def search_reports(
 
         result = with_retry(lambda: query.execute())
 
+        logger.info(
+            "Scam search completed | result_count=%s",
+            len(result.data)
+        )
+
     except Exception:
+
+        logger.exception("Scam search database query failed")
 
         raise HTTPException(
             status_code=500,
@@ -496,7 +678,14 @@ def list_suspicious_reports(limit: int = 20):
             .execute()
         )
 
+        logger.info(
+            "Suspicious reports retrieved | count=%s",
+            len(result.data)
+        )
+
     except Exception:
+
+        logger.exception("Suspicious reports query failed")
 
         raise HTTPException(
             status_code=500,
@@ -530,12 +719,23 @@ def verify_report_integrity(report_id: str):
 
     except Exception:
 
+        logger.exception(
+            "Report integrity database query failed | report_id=%s",
+            report_id
+        )
+
         raise HTTPException(
             status_code=500,
             detail="Report verification query failed"
         )
 
     if not result.data:
+
+        logger.warning(
+            "Report not found during integrity verification | report_id=%s",
+            report_id
+        )
+
         raise HTTPException(
             status_code=404,
             detail="Report not found (or not public)"
@@ -551,11 +751,27 @@ def verify_report_integrity(report_id: str):
         row["message_text"]
     )
 
+    is_intact = recomputed == row["report_hash"]
+
+    if is_intact:
+
+        logger.info(
+            "Report integrity verified | report_id=%s",
+            report_id
+        )
+
+    else:
+
+        logger.warning(
+            "Report integrity check failed | report_id=%s",
+            report_id
+        )
+
     return {
         "report_id": row["id"],
         "stored_hash": row["report_hash"],
         "recomputed_hash": recomputed,
-        "intact": recomputed == row["report_hash"],
+        "intact": is_intact,
         "blockchain_tx_hash": row["blockchain_tx_hash"]
     }
 
@@ -578,6 +794,8 @@ def get_stats():
 
     except Exception:
 
+        logger.exception("Dashboard statistics query failed")
+
         raise HTTPException(
             status_code=500,
             detail="Dashboard statistics query failed"
@@ -593,6 +811,11 @@ def get_stats():
 
         if row["category"] in counts:
             counts[row["category"]] += 1
+
+    logger.info(
+        "Dashboard statistics generated | total=%s",
+        len(result.data)
+    )
 
     return {
         "total": len(result.data),
@@ -614,6 +837,9 @@ async def upload_screenshot(file: UploadFile = File(...)):
 
         # Check maximum file size
         if len(content) > 5 * 1024 * 1024:
+
+            logger.warning("Screenshot upload rejected: file too large")
+
             raise HTTPException(
                 status_code=400,
                 detail="File too large (max 5 MB)"
@@ -643,6 +869,8 @@ async def upload_screenshot(file: UploadFile = File(...)):
 
         else:
 
+            logger.warning("Screenshot upload rejected: invalid image format")
+
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -664,9 +892,18 @@ async def upload_screenshot(file: UploadFile = File(...)):
                 )
             )
 
-            url = supabase.storage.from_("scam-evidence").get_public_url(path)
+            url = supabase.storage.from_(
+                "scam-evidence"
+            ).get_public_url(path)
+
+            logger.info(
+                "Screenshot uploaded successfully | file_type=%s",
+                detected_content_type
+            )
 
         except Exception:
+
+            logger.exception("Screenshot storage upload failed")
 
             raise HTTPException(
                 status_code=500,
@@ -689,6 +926,8 @@ async def upload_screenshot(file: UploadFile = File(...)):
 if __name__ == "__main__":
 
     import uvicorn
+
+    logger.info("Starting ScamShield Backend API")
 
     uvicorn.run(
         "main:app",

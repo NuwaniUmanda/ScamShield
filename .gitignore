@@ -47,3 +47,6 @@ scamshield_app/.env
 backend/.venv/
 backend/__pycache__/
 __pycache__/
+# Backend logs
+backend/logs/
+*.log
