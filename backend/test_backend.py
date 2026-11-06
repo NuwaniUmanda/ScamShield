@@ -6,7 +6,9 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(
+    os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+)
 
 from fastapi.testclient import TestClient
 
@@ -18,24 +20,39 @@ from logic import decide_status
 client = TestClient(app)
 
 
+# ---------------------------------------------------------------------------
+# Decision Logic Tests
+# ---------------------------------------------------------------------------
+
 class TestDecisionLogic(unittest.TestCase):
 
     def test_low_risk_should_be_suspicious(self):
+
         result = decide_status(0.93, 25)
+
         self.assertEqual(result, "suspicious")
 
     def test_high_risk_should_be_verified(self):
+
         result = decide_status(0.93, 99)
+
         self.assertEqual(result, "verified")
 
     def test_confidence_at_60_percent_should_be_suspicious(self):
+
         result = decide_status(0.60, 99)
+
         self.assertEqual(result, "suspicious")
 
+
+# ---------------------------------------------------------------------------
+# Backend AI and Blockchain Tests
+# ---------------------------------------------------------------------------
 
 class TestScamShieldBackend(unittest.TestCase):
 
     def test_ai_scam_evaluator(self):
+
         result = ai_engine.analyze_report(
             title="Urgent Bank Account Verification Alert",
             description="SMS sent asking to login and verify bank details immediately at fake URL.",
@@ -45,8 +62,16 @@ class TestScamShieldBackend(unittest.TestCase):
             financial_loss=1200.0
         )
 
-        self.assertGreaterEqual(result["risk_score"], 80)
-        self.assertEqual(result["risk_level"], "CRITICAL")
+        self.assertGreaterEqual(
+            result["risk_score"],
+            80
+        )
+
+        self.assertEqual(
+            result["risk_level"],
+            "CRITICAL"
+        )
+
         self.assertTrue(
             any(
                 "domain" in s.lower() or "tld" in s.lower()
@@ -55,6 +80,7 @@ class TestScamShieldBackend(unittest.TestCase):
         )
 
     def test_blockchain_ledger_recording_and_verification(self):
+
         block_entry = blockchain_ledger.record_scam_on_chain(
             report_id="test-uuid-99",
             title="Crypto Doubler Scheme",
@@ -63,8 +89,14 @@ class TestScamShieldBackend(unittest.TestCase):
             target_info="0x32Be343B94f860124dC4fEe278FDCBD38C102D88"
         )
 
-        self.assertTrue(block_entry["tx_hash"].startswith("0x"))
-        self.assertEqual(block_entry["status"], "VERIFIED_ON_CHAIN")
+        self.assertTrue(
+            block_entry["tx_hash"].startswith("0x")
+        )
+
+        self.assertEqual(
+            block_entry["status"],
+            "VERIFIED_ON_CHAIN"
+        )
 
         verification = blockchain_ledger.verify_hash(
             block_entry["tx_hash"]
@@ -73,44 +105,65 @@ class TestScamShieldBackend(unittest.TestCase):
         self.assertTrue(verification["is_valid"])
 
 
+# ---------------------------------------------------------------------------
+# API Tests
+# ---------------------------------------------------------------------------
+
 class TestScamShieldAPI(unittest.TestCase):
 
     def test_health_check(self):
+
         res = client.get("/")
 
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["status"], "online")
+
+        self.assertEqual(
+            res.json()["status"],
+            "online"
+        )
 
     def test_invalid_category_rejected(self):
-        res = client.post("/api/reports/submit", json={
-            "title": "Test",
-            "description": "Test",
-            "scam_type": "crypto"
-        })
+
+        res = client.post(
+            "/api/reports/submit",
+            json={
+                "title": "Test",
+                "description": "Test",
+                "scam_type": "crypto"
+            }
+        )
 
         self.assertEqual(res.status_code, 422)
 
     def test_search_requires_param(self):
+
         res = client.get("/api/reports/search")
 
         self.assertEqual(res.status_code, 400)
 
     def test_stats_shape(self):
+
         res = client.get("/api/stats")
 
         self.assertEqual(res.status_code, 200)
+
         self.assertIn("total", res.json())
+
         self.assertIn("by_category", res.json())
 
     def test_upload_rejects_non_image(self):
+
         res = client.post(
             "/api/upload-screenshot",
-            files={"file": ("test.txt", b"hello", "text/plain")},
+            files={
+                "file": ("test.txt", b"hello", "text/plain")
+            },
         )
 
         self.assertEqual(res.status_code, 400)
 
     def test_upload_rejects_file_larger_than_5mb(self):
+
         large_file = b"x" * (5 * 1024 * 1024 + 1)
 
         res = client.post(
@@ -121,12 +174,14 @@ class TestScamShieldAPI(unittest.TestCase):
         )
 
         self.assertEqual(res.status_code, 400)
+
         self.assertEqual(
             res.json()["detail"],
             "File too large (max 5 MB)"
         )
 
     def test_search_returns_expected_shape(self):
+
         res = client.get(
             "/api/reports/search",
             params={"url": "secure-login"}
@@ -137,9 +192,12 @@ class TestScamShieldAPI(unittest.TestCase):
         body = res.json()
 
         self.assertIn("found", body)
+
         self.assertIn("results", body)
 
+    # -----------------------------------------------------------------------
     # Duplicate Report Detection Test
+    # -----------------------------------------------------------------------
 
     def test_duplicate_report_returns_409(self):
 
@@ -175,20 +233,32 @@ class TestScamShieldAPI(unittest.TestCase):
                 side_effect=lambda operation: operation()
             ):
 
-                with patch("main.supabase.table") as mock_table:
+                with patch(
+                    "main.supabase_admin.table"
+                ) as mock_table:
 
                     with patch(
                         "main.blockchain_ledger.record_scam_on_chain"
                     ) as mock_blockchain:
 
-                        mock_table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = existing_report
+                        (
+                            mock_table.return_value
+                            .select.return_value
+                            .eq.return_value
+                            .eq.return_value
+                            .limit.return_value
+                            .execute.return_value
+                        ) = existing_report
 
                         res = client.post(
                             "/api/reports/submit",
                             json=report_data
                         )
 
-                        self.assertEqual(res.status_code, 409)
+                        self.assertEqual(
+                            res.status_code,
+                            409
+                        )
 
                         body = res.json()
 
@@ -208,10 +278,217 @@ class TestScamShieldAPI(unittest.TestCase):
 
                         mock_table.return_value.insert.assert_not_called()
 
+    # -----------------------------------------------------------------------
+    # Pending Blockchain Workflow Success Test
+    # -----------------------------------------------------------------------
+
+    def test_verified_report_pending_then_updated_after_blockchain(self):
+
+        report_data = {
+            "title": "Urgent Bank Verification",
+            "description": "Verify your bank account immediately",
+            "scam_type": "phishing",
+            "target_url": "https://test-suspicious.example/login",
+            "message_text": "Verify your account now"
+        }
+
+        no_duplicates = SimpleNamespace(data=[])
+
+        transaction_hash = "0x123456789"
+
+        with patch(
+            "main.ai_engine.analyze_report",
+            return_value={
+                "confidence": 0.93,
+                "risk_score": 99
+            }
+        ):
+
+            with patch(
+                "main.with_retry",
+                side_effect=lambda operation: operation()
+            ):
+
+                with patch(
+                    "main.supabase_admin.table"
+                ) as mock_table:
+
+                    with patch(
+                        "main.blockchain_ledger.record_scam_on_chain",
+                        return_value={
+                            "tx_hash": transaction_hash
+                        }
+                    ) as mock_blockchain:
+
+                        table = mock_table.return_value
+
+                        # No existing duplicate report
+                        (
+                            table.select.return_value
+                            .eq.return_value
+                            .eq.return_value
+                            .limit.return_value
+                            .execute.return_value
+                        ) = no_duplicates
+
+                        response = client.post(
+                            "/api/reports/submit",
+                            json=report_data
+                        )
+
+                        self.assertEqual(
+                            response.status_code,
+                            200
+                        )
+
+                        body = response.json()
+
+                        # Final response should be verified
+                        self.assertEqual(
+                            body["status"],
+                            "verified"
+                        )
+
+                        self.assertEqual(
+                            body["saved"][0]["status"],
+                            "verified"
+                        )
+
+                        self.assertEqual(
+                            body["saved"][0]["blockchain_tx_hash"],
+                            transaction_hash
+                        )
+
+                        # Initial database insertion must be pending
+                        insert_data = table.insert.call_args.args[0]
+
+                        self.assertEqual(
+                            insert_data["status"],
+                            "pending_blockchain"
+                        )
+
+                        self.assertIsNone(
+                            insert_data["blockchain_tx_hash"]
+                        )
+
+                        self.assertFalse(
+                            insert_data["is_duplicate"]
+                        )
+
+                        # Database update after blockchain success
+                        update_data = table.update.call_args.args[0]
+
+                        self.assertEqual(
+                            update_data["status"],
+                            "verified"
+                        )
+
+                        self.assertEqual(
+                            update_data["blockchain_tx_hash"],
+                            transaction_hash
+                        )
+
+                        mock_blockchain.assert_called_once()
+
+                        table.update.assert_called_once()
+
+    # -----------------------------------------------------------------------
+    # Pending Blockchain Workflow Failure Test
+    # -----------------------------------------------------------------------
+
+    def test_blockchain_failure_keeps_report_pending(self):
+
+        report_data = {
+            "title": "Blockchain Failure Test",
+            "description": "Suspicious bank account verification request",
+            "scam_type": "phishing",
+            "target_url": "https://failure-test.example/login",
+            "message_text": "Verify your account"
+        }
+
+        no_duplicates = SimpleNamespace(data=[])
+
+        with patch(
+            "main.ai_engine.analyze_report",
+            return_value={
+                "confidence": 0.93,
+                "risk_score": 99
+            }
+        ):
+
+            with patch(
+                "main.with_retry",
+                side_effect=lambda operation: operation()
+            ):
+
+                with patch(
+                    "main.supabase_admin.table"
+                ) as mock_table:
+
+                    with patch(
+                        "main.blockchain_ledger.record_scam_on_chain",
+                        side_effect=Exception("Blockchain unavailable")
+                    ) as mock_blockchain:
+
+                        table = mock_table.return_value
+
+                        # No existing duplicate report
+                        (
+                            table.select.return_value
+                            .eq.return_value
+                            .eq.return_value
+                            .limit.return_value
+                            .execute.return_value
+                        ) = no_duplicates
+
+                        response = client.post(
+                            "/api/reports/submit",
+                            json=report_data
+                        )
+
+                        self.assertEqual(
+                            response.status_code,
+                            502
+                        )
+
+                        body = response.json()
+
+                        self.assertIn(
+                            "Report saved, but blockchain recording failed",
+                            body["detail"]["message"]
+                        )
+
+                        self.assertIn(
+                            "report_id",
+                            body["detail"]
+                        )
+
+                        # Initial database insertion must be pending
+                        insert_data = table.insert.call_args.args[0]
+
+                        self.assertEqual(
+                            insert_data["status"],
+                            "pending_blockchain"
+                        )
+
+                        self.assertIsNone(
+                            insert_data["blockchain_tx_hash"]
+                        )
+
+                        # Failed blockchain must not update database
+                        table.update.assert_not_called()
+
+                        mock_blockchain.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Report Hash Tests
+# ---------------------------------------------------------------------------
 
 class TestReportHash(unittest.TestCase):
 
     def test_same_input_same_hash(self):
+
         h1 = compute_report_hash(
             "desc", "spam", None, None, "msg"
         )
@@ -221,9 +498,11 @@ class TestReportHash(unittest.TestCase):
         )
 
         self.assertEqual(h1, h2)
+
         self.assertEqual(len(h1), 64)
 
     def test_changed_input_changes_hash(self):
+
         original = compute_report_hash(
             "desc", "spam", None, None, "msg"
         )
@@ -235,12 +514,17 @@ class TestReportHash(unittest.TestCase):
         self.assertNotEqual(original, tampered)
 
     def test_verify_unknown_id_returns_error(self):
+
         res = client.get(
             "/api/reports/verify/00000000-0000-0000-0000-000000000000"
         )
 
         self.assertEqual(res.status_code, 404)
 
+
+# ---------------------------------------------------------------------------
+# Run Tests
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     unittest.main()

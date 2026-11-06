@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from ai_module.ai_engine import ai_engine
 from blockchain_module.ledger import blockchain_ledger
-from database import supabase
+from database import supabase, supabase_admin
 from logic import decide_status
 from retry_helper import with_retry
 
@@ -174,19 +174,24 @@ def verify_blockchain_hash(tx_hash: str):
 
 
 # ---------------------------------------------------------------------------
-# Submit Scam Report
+# Submit Scam Report - Pending Blockchain Workflow
 # ---------------------------------------------------------------------------
 
 @app.post("/api/reports/submit")
 def submit_report(req: FullReportSubmitRequest):
 
     """
-    Analyze report using AI.
-    Decide verified or suspicious using confidence and risk score.
-    Check for duplicate reports.
-    Record verified reports on blockchain.
-    Save reports to Supabase.
+    1. Analyze report using AI.
+    2. Check for duplicate reports.
+    3. Save report to Supabase.
+    4. Keep verified candidates as pending_blockchain.
+    5. Record verified candidates on blockchain.
+    6. Update database after successful blockchain recording.
     """
+
+    # -----------------------------------------------------------------------
+    # Prepare AI Description
+    # -----------------------------------------------------------------------
 
     ai_description = req.description
 
@@ -195,6 +200,10 @@ def submit_report(req: FullReportSubmitRequest):
 
     if req.target_account:
         ai_description += " " + req.target_account
+
+    # -----------------------------------------------------------------------
+    # AI Analysis
+    # -----------------------------------------------------------------------
 
     ai_result = ai_engine.analyze_report(
         title=req.title,
@@ -211,6 +220,10 @@ def submit_report(req: FullReportSubmitRequest):
         ai_result["confidence"],
         ai_result["risk_score"]
     )
+
+    # -----------------------------------------------------------------------
+    # Generate Report ID and Hash
+    # -----------------------------------------------------------------------
 
     report_id = str(uuid.uuid4())
 
@@ -229,18 +242,19 @@ def submit_report(req: FullReportSubmitRequest):
     try:
 
         duplicate_result = with_retry(
-            lambda: supabase.table("scam_reports")
+            lambda: supabase_admin.table("scam_reports")
             .select("id,status,created_at")
             .eq("report_hash", report_hash)
+            .eq("is_duplicate", False)
             .limit(1)
             .execute()
         )
 
-    except Exception as e:
+    except Exception:
 
         raise HTTPException(
             status_code=500,
-            detail=f"Duplicate check error: {e}"
+            detail="Duplicate report check failed"
         )
 
     if duplicate_result.data:
@@ -257,31 +271,14 @@ def submit_report(req: FullReportSubmitRequest):
         )
 
     # -----------------------------------------------------------------------
-    # Blockchain Recording
+    # Initial Database Status
     # -----------------------------------------------------------------------
 
-    tx_hash = None
-
-    if status == "verified":
-
-        try:
-
-            block = blockchain_ledger.record_scam_on_chain(
-                report_id=report_id,
-                title=req.title,
-                scam_type=req.scam_type,
-                risk_score=ai_result["risk_score"],
-                target_info=req.target_url or req.target_account or ""
-            )
-
-            tx_hash = block["tx_hash"]
-
-        except Exception as e:
-
-            raise HTTPException(
-                status_code=500,
-                detail=f"Blockchain error: {e}"
-            )
+    initial_status = (
+        "pending_blockchain"
+        if status == "verified"
+        else "suspicious"
+    )
 
     # -----------------------------------------------------------------------
     # Complete Report Data Mapping
@@ -303,30 +300,34 @@ def submit_report(req: FullReportSubmitRequest):
         "risk_score": ai_result["risk_score"],
         "confidence": ai_result["confidence"],
         "ai_analysis": ai_result,
-        "status": status,
-        "blockchain_tx_hash": tx_hash,
+        "status": initial_status,
+        "blockchain_tx_hash": None,
         "report_hash": report_hash,
+        "is_duplicate": False
     }
 
+    # Keep a separate copy for the database insertion.
+    # This preserves the original pending status.
+
+    insert_row = row.copy()
+
     # -----------------------------------------------------------------------
-    # Save Report to Supabase
+    # Save Report Before Blockchain Recording
     # -----------------------------------------------------------------------
 
     try:
 
         with_retry(
-            lambda: supabase.table("scam_reports")
-            .insert(row, returning="minimal")
+            lambda: supabase_admin.table("scam_reports")
+            .insert(insert_row, returning="minimal")
             .execute()
         )
 
     except Exception as e:
 
-        # PostgreSQL error 23505 means unique constraint violation.
-        # This protects against duplicate requests arriving simultaneously.
-
         error_code = getattr(e, "code", None)
 
+        # PostgreSQL unique constraint violation
         if error_code == "23505":
 
             raise HTTPException(
@@ -339,13 +340,95 @@ def submit_report(req: FullReportSubmitRequest):
 
         raise HTTPException(
             status_code=500,
-            detail=f"Database error: {e}"
+            detail="Database report insertion failed"
         )
+
+    # Separate copy for the final API response.
+    response_row = row.copy()
+
+    # -----------------------------------------------------------------------
+    # Blockchain Recording
+    # -----------------------------------------------------------------------
+
+    if status == "verified":
+
+        try:
+
+            block = blockchain_ledger.record_scam_on_chain(
+                report_id=report_id,
+                title=req.title,
+                scam_type=req.scam_type,
+                risk_score=ai_result["risk_score"],
+                target_info=req.target_url or req.target_account or ""
+            )
+
+            tx_hash = block["tx_hash"]
+
+        except Exception:
+
+            # Report remains pending_blockchain.
+            # It needs a later retry or reconciliation.
+
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": (
+                        "Report saved, but blockchain recording failed. "
+                        "Report remains pending."
+                    ),
+                    "report_id": report_id
+                }
+            )
+
+        # -------------------------------------------------------------------
+        # Update Database After Blockchain Success
+        # -------------------------------------------------------------------
+
+        try:
+
+            with_retry(
+                lambda: supabase_admin.table("scam_reports")
+                .update({
+                    "status": "verified",
+                    "blockchain_tx_hash": tx_hash
+                })
+                .eq("id", report_id)
+                .eq("status", "pending_blockchain")
+                .execute()
+            )
+
+        except Exception:
+
+            # Blockchain transaction exists but database update failed.
+            # Report remains pending for reconciliation.
+
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": (
+                        "Blockchain recording succeeded, "
+                        "but database update failed. "
+                        "Report needs reconciliation."
+                    ),
+                    "report_id": report_id,
+                    "blockchain_tx_hash": tx_hash
+                }
+            )
+
+        # Update only the response copy.
+        # Do not modify the original database insertion data.
+
+        response_row["status"] = "verified"
+        response_row["blockchain_tx_hash"] = tx_hash
+
+    # -----------------------------------------------------------------------
+    # Final Response
+    # -----------------------------------------------------------------------
 
     return {
         "status": status,
         "ai_result": ai_result,
-        "saved": [row]
+        "saved": [response_row]
     }
 
 
@@ -368,7 +451,8 @@ def search_reports(
     try:
 
         query = supabase.table("scam_reports").select(
-            "id,category,target_url,target_account,screenshot_url,risk_score,status,blockchain_tx_hash,report_hash,created_at"
+            "id,category,target_url,target_account,screenshot_url,"
+            "risk_score,status,blockchain_tx_hash,report_hash,created_at"
         ).eq("status", "verified")
 
         if url:
@@ -379,11 +463,11 @@ def search_reports(
 
         result = with_retry(lambda: query.execute())
 
-    except Exception as e:
+    except Exception:
 
         raise HTTPException(
             status_code=500,
-            detail=f"Database error: {e}"
+            detail="Database search failed"
         )
 
     return {
@@ -412,11 +496,11 @@ def list_suspicious_reports(limit: int = 20):
             .execute()
         )
 
-    except Exception as e:
+    except Exception:
 
         raise HTTPException(
             status_code=500,
-            detail=f"Database error: {e}"
+            detail="Suspicious reports query failed"
         )
 
     return {
@@ -437,17 +521,18 @@ def verify_report_integrity(report_id: str):
         result = with_retry(
             lambda: supabase.table("scam_reports")
             .select(
-                "id,category,description,target_url,target_account,message_text,report_hash,blockchain_tx_hash"
+                "id,category,description,target_url,target_account,"
+                "message_text,report_hash,blockchain_tx_hash"
             )
             .eq("id", report_id)
             .execute()
         )
 
-    except Exception as e:
+    except Exception:
 
         raise HTTPException(
             status_code=500,
-            detail=f"Database error: {e}"
+            detail="Report verification query failed"
         )
 
     if not result.data:
@@ -491,11 +576,11 @@ def get_stats():
             .execute()
         )
 
-    except Exception as e:
+    except Exception:
 
         raise HTTPException(
             status_code=500,
-            detail=f"Database error: {e}"
+            detail="Dashboard statistics query failed"
         )
 
     counts = {
@@ -534,19 +619,19 @@ async def upload_screenshot(file: UploadFile = File(...)):
                 detail="File too large (max 5 MB)"
             )
 
-        # Detect actual PNG file signature
+        # Detect PNG signature
         if content.startswith(b"\x89PNG\r\n\x1a\n"):
 
             extension = "png"
             detected_content_type = "image/png"
 
-        # Detect actual JPEG file signature
+        # Detect JPEG signature
         elif content.startswith(b"\xff\xd8\xff"):
 
             extension = "jpg"
             detected_content_type = "image/jpeg"
 
-        # Detect actual WEBP file signature
+        # Detect WEBP signature
         elif (
             len(content) >= 12
             and content[0:4] == b"RIFF"
@@ -560,10 +645,13 @@ async def upload_screenshot(file: UploadFile = File(...)):
 
             raise HTTPException(
                 status_code=400,
-                detail="Invalid image file. Upload a real PNG, JPEG or WEBP image"
+                detail=(
+                    "Invalid image file. "
+                    "Upload a real PNG, JPEG or WEBP image"
+                )
             )
 
-        # Generate a unique filename
+        # Generate unique filename
         path = f"{uuid.uuid4()}.{extension}"
 
         try:
@@ -578,11 +666,11 @@ async def upload_screenshot(file: UploadFile = File(...)):
 
             url = supabase.storage.from_("scam-evidence").get_public_url(path)
 
-        except Exception as e:
+        except Exception:
 
             raise HTTPException(
                 status_code=500,
-                detail=f"Storage error: {e}"
+                detail="Screenshot upload failed"
             )
 
         return {
