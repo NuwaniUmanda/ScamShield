@@ -1,11 +1,9 @@
-
 import sys
 import os
 import uuid
 import hashlib
 import json
 import time
-
 from typing import Optional, List, Literal
 
 # Ensure parent directory is in path
@@ -17,6 +15,12 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+# SlowAPI Rate Limiting Imports
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
+
 from ai_module.ai_engine import ai_engine
 from blockchain_module.ledger import blockchain_ledger
 from database import supabase, supabase_admin
@@ -25,11 +29,39 @@ from retry_helper import with_retry
 from logging_config import logger
 
 
+# ---------------------------------------------------------------------------
+# Rate Limiting Configuration
+# ---------------------------------------------------------------------------
+
+# 100 requests per minute for each API route, per client IP.
+# SlowAPI uses in-memory storage by default.
+# Production deployments with multiple workers should use shared storage
+# such as Redis.
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["100 per minute"],
+)
+
+
+# ---------------------------------------------------------------------------
+# FastAPI Application
+# ---------------------------------------------------------------------------
+
 app = FastAPI(
     title="ScamShield API Server",
     description="Backend API service connecting AI Scam Intelligence & Blockchain Ledger for ScamShield",
     version="1.0.0"
 )
+
+app.state.limiter = limiter
+
+app.add_exception_handler(
+    RateLimitExceeded,
+    _rate_limit_exceeded_handler
+)
+
+app.add_middleware(SlowAPIMiddleware)
 
 
 # ---------------------------------------------------------------------------
