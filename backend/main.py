@@ -308,6 +308,10 @@ def submit_report(req: FullReportSubmitRequest):
         "report_hash": report_hash,
     }
 
+    # -----------------------------------------------------------------------
+    # Save Report to Supabase
+    # -----------------------------------------------------------------------
+
     try:
 
         with_retry(
@@ -317,6 +321,21 @@ def submit_report(req: FullReportSubmitRequest):
         )
 
     except Exception as e:
+
+        # PostgreSQL error 23505 means unique constraint violation.
+        # This protects against duplicate requests arriving simultaneously.
+
+        error_code = getattr(e, "code", None)
+
+        if error_code == "23505":
+
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "An identical report already exists",
+                    "report_hash": report_hash
+                }
+            )
 
         raise HTTPException(
             status_code=500,
@@ -589,4 +608,3 @@ if __name__ == "__main__":
         port=8000,
         reload=True
     )
-
