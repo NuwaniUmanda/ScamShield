@@ -4,6 +4,7 @@ import uuid
 import hashlib
 import json
 import time
+
 from typing import Optional, List, Literal
 
 # Ensure parent directory is in path
@@ -32,11 +33,6 @@ from logging_config import logger
 # ---------------------------------------------------------------------------
 # Rate Limiting Configuration
 # ---------------------------------------------------------------------------
-
-# 100 requests per minute for each API route, per client IP.
-# SlowAPI uses in-memory storage by default.
-# Production deployments with multiple workers should use shared storage
-# such as Redis.
 
 limiter = Limiter(
     key_func=get_remote_address,
@@ -124,6 +120,26 @@ async def log_api_requests(request, call_next):
         )
 
         raise
+
+
+# ---------------------------------------------------------------------------
+# HTTP Security Headers Middleware
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+
+    response = await call_next(request)
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+
+    response.headers["X-Frame-Options"] = "DENY"
+
+    response.headers["Referrer-Policy"] = (
+        "strict-origin-when-cross-origin"
+    )
+
+    return response
 
 
 # ---------------------------------------------------------------------------
