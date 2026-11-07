@@ -13,7 +13,7 @@ sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 )
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -752,13 +752,21 @@ def submit_report(req: FullReportSubmitRequest):
 
 
 # ---------------------------------------------------------------------------
-# Public Scam Search
+# Public Scam Search - Query Parameter Validation
 # ---------------------------------------------------------------------------
 
 @app.get("/api/reports/search")
 def search_reports(
-    url: Optional[str] = None,
-    account: Optional[str] = None
+    url: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=2048
+    ),
+    account: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=255
+    )
 ):
 
     if not url and not account:
@@ -807,13 +815,17 @@ def search_reports(
 
 
 # ---------------------------------------------------------------------------
-# Suspicious Reports (Metadata Only)
+# Suspicious Reports - Query Parameter Validation
 # ---------------------------------------------------------------------------
 
 @app.get("/api/reports/suspicious")
-def list_suspicious_reports(limit: int = 20):
-
-    limit = max(1, min(limit, 100))
+def list_suspicious_reports(
+    limit: int = Query(
+        default=20,
+        ge=1,
+        le=100
+    )
+):
 
     try:
 
