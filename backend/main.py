@@ -13,8 +13,14 @@ sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 )
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from pydantic import BaseModel, Field
 
 # SlowAPI Rate Limiting Imports
@@ -59,6 +65,106 @@ app.add_exception_handler(
 )
 
 app.add_middleware(SlowAPIMiddleware)
+
+
+# ---------------------------------------------------------------------------
+# Global Error Handling
+# ---------------------------------------------------------------------------
+
+# Handle HTTP errors such as 400, 404 and 405.
+# Preserve the existing FastAPI response structure.
+
+async def http_exception_handler(
+    request: Request,
+    exc: StarletteHTTPException
+):
+
+    logger.warning(
+        "HTTP exception | method=%s path=%s status_code=%s",
+        request.method,
+        request.url.path,
+        exc.status_code
+    )
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": jsonable_encoder(exc.detail)
+        },
+        headers=exc.headers
+    )
+
+
+# Handle invalid request data.
+# Avoid returning submitted input values in validation details.
+
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError
+):
+
+    logger.warning(
+        "Request validation failed | method=%s path=%s error_count=%s",
+        request.method,
+        request.url.path,
+        len(exc.errors())
+    )
+
+    safe_errors = [
+        {
+            "loc": error.get("loc", []),
+            "msg": error.get("msg", "Invalid input"),
+            "type": error.get("type", "value_error")
+        }
+        for error in exc.errors()
+    ]
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": jsonable_encoder(safe_errors)
+        }
+    )
+
+
+# Handle unexpected server errors.
+# Never expose internal exception details to API clients.
+
+async def unexpected_exception_handler(
+    request: Request,
+    exc: Exception
+):
+
+    logger.exception(
+        "Unhandled server error | method=%s path=%s",
+        request.method,
+        request.url.path
+    )
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error"
+        }
+    )
+
+
+# Register global exception handlers.
+
+app.add_exception_handler(
+    StarletteHTTPException,
+    http_exception_handler
+)
+
+app.add_exception_handler(
+    RequestValidationError,
+    validation_exception_handler
+)
+
+app.add_exception_handler(
+    Exception,
+    unexpected_exception_handler
+)
 
 
 # ---------------------------------------------------------------------------
