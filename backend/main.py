@@ -1,3 +1,4 @@
+
 import sys
 import os
 import uuid
@@ -14,7 +15,7 @@ sys.path.append(
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # SlowAPI Rate Limiting Imports
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -143,44 +144,142 @@ async def add_security_headers(request, call_next):
 
 
 # ---------------------------------------------------------------------------
-# Schemas
+# Schemas - Backend Input Validation
 # ---------------------------------------------------------------------------
 
 class AIAnalysisRequest(BaseModel):
 
-    title: str
-    description: str
-    scam_type: Optional[str] = "other"
-    target_url: Optional[str] = None
-    target_phone: Optional[str] = None
-    target_wallet: Optional[str] = None
-    target_email: Optional[str] = None
-    financial_loss: Optional[float] = 0.0
+    title: str = Field(
+        min_length=1,
+        max_length=200
+    )
+
+    description: str = Field(
+        min_length=1,
+        max_length=5000
+    )
+
+    scam_type: Optional[str] = Field(
+        default="other",
+        max_length=50
+    )
+
+    target_url: Optional[str] = Field(
+        default=None,
+        max_length=2048
+    )
+
+    target_phone: Optional[str] = Field(
+        default=None,
+        max_length=30
+    )
+
+    target_wallet: Optional[str] = Field(
+        default=None,
+        max_length=255
+    )
+
+    target_email: Optional[str] = Field(
+        default=None,
+        max_length=254
+    )
+
+    financial_loss: Optional[float] = Field(
+        default=0.0,
+        ge=0
+    )
 
 
 class BlockchainRecordRequest(BaseModel):
 
-    report_id: str
-    title: str
-    scam_type: str
-    risk_score: int
-    target_info: Optional[str] = ""
+    report_id: str = Field(
+        min_length=1,
+        max_length=100
+    )
+
+    title: str = Field(
+        min_length=1,
+        max_length=200
+    )
+
+    scam_type: str = Field(
+        min_length=1,
+        max_length=50
+    )
+
+    risk_score: int = Field(
+        ge=0,
+        le=100
+    )
+
+    target_info: Optional[str] = Field(
+        default="",
+        max_length=2048
+    )
 
 
 class FullReportSubmitRequest(BaseModel):
 
-    title: str
-    description: str
-    scam_type: Literal["phishing", "fake_account", "spam"]
-    target_url: Optional[str] = None
-    target_account: Optional[str] = None
-    message_text: Optional[str] = None
-    screenshot_url: Optional[str] = None
-    target_phone: Optional[str] = None
-    target_wallet: Optional[str] = None
-    target_email: Optional[str] = None
-    financial_loss: Optional[float] = 0.0
-    evidence_urls: Optional[List[str]] = []
+    title: str = Field(
+        min_length=1,
+        max_length=200
+    )
+
+    description: str = Field(
+        min_length=1,
+        max_length=5000
+    )
+
+    scam_type: Literal[
+        "phishing",
+        "fake_account",
+        "spam"
+    ]
+
+    target_url: Optional[str] = Field(
+        default=None,
+        max_length=2048
+    )
+
+    target_account: Optional[str] = Field(
+        default=None,
+        max_length=255
+    )
+
+    message_text: Optional[str] = Field(
+        default=None,
+        max_length=10000
+    )
+
+    screenshot_url: Optional[str] = Field(
+        default=None,
+        max_length=2048
+    )
+
+    target_phone: Optional[str] = Field(
+        default=None,
+        max_length=30
+    )
+
+    target_wallet: Optional[str] = Field(
+        default=None,
+        max_length=255
+    )
+
+    target_email: Optional[str] = Field(
+        default=None,
+        max_length=254
+    )
+
+    financial_loss: Optional[float] = Field(
+        default=0.0,
+        ge=0
+    )
+
+    evidence_urls: Optional[List[str]] = Field(
+        default_factory=list,
+        max_length=10
+    )
 
 
 # ---------------------------------------------------------------------------
