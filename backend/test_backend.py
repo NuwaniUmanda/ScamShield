@@ -215,7 +215,13 @@ class TestScamShieldAPI(unittest.TestCase):
                 {
                     "id": "existing-report-123",
                     "status": "suspicious",
-                    "created_at": "2026-11-05T12:00:00+00:00"
+                    "created_at": "2026-11-05T12:00:00+00:00",
+                    "category": "phishing",
+                    "description": "Please verify your bank account immediately",
+                    "target_url": "https://example-suspicious.test/login",
+                    "target_account": "fake-bank-page",
+                    "message_text": "Please verify your bank account immediately",
+                    "is_duplicate": False
                 }
             ]
         )
@@ -245,8 +251,6 @@ class TestScamShieldAPI(unittest.TestCase):
                             mock_table.return_value
                             .select.return_value
                             .eq.return_value
-                            .eq.return_value
-                            .limit.return_value
                             .execute.return_value
                         ) = existing_report
 
@@ -326,8 +330,6 @@ class TestScamShieldAPI(unittest.TestCase):
                         (
                             table.select.return_value
                             .eq.return_value
-                            .eq.return_value
-                            .limit.return_value
                             .execute.return_value
                         ) = no_duplicates
 
@@ -436,8 +438,6 @@ class TestScamShieldAPI(unittest.TestCase):
                         (
                             table.select.return_value
                             .eq.return_value
-                            .eq.return_value
-                            .limit.return_value
                             .execute.return_value
                         ) = no_duplicates
 

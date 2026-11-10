@@ -71,9 +71,6 @@ app.add_middleware(SlowAPIMiddleware)
 # Global Error Handling
 # ---------------------------------------------------------------------------
 
-# Handle HTTP errors such as 400, 404 and 405.
-# Preserve the existing FastAPI response structure.
-
 async def http_exception_handler(
     request: Request,
     exc: StarletteHTTPException
@@ -94,9 +91,6 @@ async def http_exception_handler(
         headers=exc.headers
     )
 
-
-# Handle invalid request data.
-# Avoid returning submitted input values in validation details.
 
 async def validation_exception_handler(
     request: Request,
@@ -126,9 +120,6 @@ async def validation_exception_handler(
         }
     )
 
-
-# Handle unexpected server errors.
-# Never expose internal exception details to API clients.
 
 async def unexpected_exception_handler(
     request: Request,
@@ -336,8 +327,18 @@ class FullReportSubmitRequest(BaseModel):
         max_length=5000
     )
 
+    # Support all current Frontend categories
+    # while retaining legacy categories.
+
     scam_type: Literal[
         "phishing",
+        "crypto_investment",
+        "impersonation",
+        "caller_scam",
+        "job_scam",
+        "fake_store",
+        "romance",
+        "other",
         "fake_account",
         "spam"
     ]
@@ -414,6 +415,21 @@ def compute_report_hash(
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()
+
+
+def normalize_duplicate_value(value):
+
+    """
+    Normalize report values for duplicate comparison.
+
+    None becomes an empty string.
+    Leading, trailing and repeated whitespace is normalized.
+    """
+
+    if value is None:
+        return ""
+
+    return " ".join(str(value).split())
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +551,7 @@ def verify_blockchain_hash(tx_hash: str):
 
 
 # ---------------------------------------------------------------------------
-# Submit Scam Report - Pending Blockchain Workflow
+# Submit Scam Report - Automatic AI Decision Workflow
 # ---------------------------------------------------------------------------
 
 @app.post("/api/reports/submit")
@@ -616,14 +632,41 @@ def submit_report(req: FullReportSubmitRequest):
     # Duplicate Report Detection
     # -----------------------------------------------------------------------
 
+    # Compare the actual report content instead of relying only on
+    # report_hash. This also detects legacy records with NULL or incorrect
+    # report_hash values.
+
+    requested_content = {
+        "category": normalize_duplicate_value(
+            req.scam_type
+        ).casefold(),
+
+        "description": normalize_duplicate_value(
+            req.description
+        ),
+
+        "target_url": normalize_duplicate_value(
+            req.target_url
+        ),
+
+        "target_account": normalize_duplicate_value(
+            req.target_account
+        ),
+
+        "message_text": normalize_duplicate_value(
+            req.message_text
+        ),
+    }
+
     try:
 
         duplicate_result = with_retry(
             lambda: supabase_admin.table("scam_reports")
-            .select("id,status,created_at")
-            .eq("report_hash", report_hash)
-            .eq("is_duplicate", False)
-            .limit(1)
+            .select(
+                "id,status,created_at,category,description,"
+                "target_url,target_account,message_text,is_duplicate"
+            )
+            .eq("category", req.scam_type)
             .execute()
         )
 
@@ -639,23 +682,49 @@ def submit_report(req: FullReportSubmitRequest):
             detail="Duplicate report check failed"
         )
 
-    if duplicate_result.data:
+    for existing in duplicate_result.data or []:
 
-        existing = duplicate_result.data[0]
+        # Ignore records already marked as duplicates.
+        if existing.get("is_duplicate") is True:
+            continue
 
-        logger.warning(
-            "Duplicate report detected | existing_report_id=%s",
-            existing["id"]
-        )
+        existing_content = {
+            "category": normalize_duplicate_value(
+                existing.get("category")
+            ).casefold(),
 
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": "An identical report already exists",
-                "existing_report_id": existing["id"],
-                "existing_status": existing["status"]
-            }
-        )
+            "description": normalize_duplicate_value(
+                existing.get("description")
+            ),
+
+            "target_url": normalize_duplicate_value(
+                existing.get("target_url")
+            ),
+
+            "target_account": normalize_duplicate_value(
+                existing.get("target_account")
+            ),
+
+            "message_text": normalize_duplicate_value(
+                existing.get("message_text")
+            ),
+        }
+
+        if existing_content == requested_content:
+
+            logger.warning(
+                "Duplicate report detected | existing_report_id=%s",
+                existing["id"]
+            )
+
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "An identical report already exists",
+                    "existing_report_id": existing["id"],
+                    "existing_status": existing["status"]
+                }
+            )
 
     # -----------------------------------------------------------------------
     # Initial Database Status
@@ -693,7 +762,6 @@ def submit_report(req: FullReportSubmitRequest):
         "is_duplicate": False
     }
 
-    # Preserve original database insertion data
     insert_row = row.copy()
 
     # -----------------------------------------------------------------------
@@ -743,7 +811,6 @@ def submit_report(req: FullReportSubmitRequest):
             detail="Database report insertion failed"
         )
 
-    # Separate copy for final API response
     response_row = row.copy()
 
     # -----------------------------------------------------------------------
@@ -829,7 +896,6 @@ def submit_report(req: FullReportSubmitRequest):
                 }
             )
 
-        # Update response copy only
         response_row["status"] = "verified"
         response_row["blockchain_tx_hash"] = tx_hash
 
@@ -889,7 +955,7 @@ def search_reports(
         query = supabase.table("scam_reports").select(
             "id,category,target_url,target_account,screenshot_url,"
             "risk_score,status,blockchain_tx_hash,report_hash,created_at"
-        ).eq("status", "verified")
+        ).eq("status", "verified").eq("is_duplicate", False)
 
         if url:
             query = query.ilike("target_url", f"%{url}%")
@@ -1068,6 +1134,13 @@ def get_stats():
 
     counts = {
         "phishing": 0,
+        "crypto_investment": 0,
+        "impersonation": 0,
+        "caller_scam": 0,
+        "job_scam": 0,
+        "fake_store": 0,
+        "romance": 0,
+        "other": 0,
         "fake_account": 0,
         "spam": 0
     }
